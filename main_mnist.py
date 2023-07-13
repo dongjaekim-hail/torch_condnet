@@ -294,21 +294,21 @@ def main(args):
                 accs += acc
                 PGs += PG.item()
             #print accuracy
-            print('Test Accuracy: {}'.format(acc / bn))
+            print('Test Accuracy: {}'.format(accs / bn))
 
             # wandb log test/epoch
-            wandb.log({'test/epoch_acc': acc / bn, 'test/epoch_cost': costs / bn, 'test/epoch_pg': PGs / bn})
+            wandb.log({'test/epoch_acc': accs / bn, 'test/epoch_cost': costs / bn, 'test/epoch_pg': PGs / bn})
 
 if __name__=='__main__':
     # make arguments and defaults for the parameters
     import argparse
     args = argparse.ArgumentParser()
     args.add_argument('--nlayers', type=int, default=3)
-    args.add_argument('--lambda_s', type=float, default=10)
-    args.add_argument('--lambda_v', type=float, default=1)
+    args.add_argument('--lambda_s', type=float, default=20)
+    args.add_argument('--lambda_v', type=float, default=2)
     args.add_argument('--lambda_l2', type=float, default=5e-4)
     args.add_argument('--lambda_pg', type=float, default=1e-3)
-    args.add_argument('--tau', type=float, default=0.5)
+    args.add_argument('--tau', type=float, default=0.2)
     args.add_argument('--lr', type=float, default=0.1)
     args.add_argument('--max_epochs', type=int, default=1000)
     args.add_argument('--condnet_min_prob', type=float, default=0.2)
