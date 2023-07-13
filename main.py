@@ -8,15 +8,15 @@ from torchvision import transforms, datasets # 데이터를 다루기 위한 Tor
 import torch.nn as nn
 import torch.nn.functional as F
 
-nlayers = 4
+nlayers = 2
 nfilters = 96
 lambda_s = 100
 lambda_v = 10
 tau = 0.5
 lr = 0.003
 max_epochs = 1000
-condnet_min_prob = 0.1
-condnet_max_prob = 0.75
+condnet_min_prob = 0.5
+condnet_max_prob = 1
 
 class policyNet(nn.Module):
     def __init__(self, n_layer=4, hidden_s = [1024, 1024, np.nan]):
@@ -45,94 +45,6 @@ class Net(nn.Module):
         x = F.softmax(x, dim=1)
         return x
 
-class model_condnet2(nn.Module):
-    def __init__(self):
-        super().__init__()
-        input_dim = 32 * 32 * 3
-        mlp_hidden = 1024
-        output_dim = 10
-
-        self.mlp_nlayer = 0
-
-        self.mlp = nn.ModuleList()
-        self.mlp.append(nn.Linear(input_dim, mlp_hidden))
-        for i in range(nlayers):
-            self.mlp.append(nn.Linear(mlp_hidden, mlp_hidden))
-        self.mlp.append(nn.Linear(mlp_hidden, output_dim))
-
-        n_each_policylayer = 2
-        # n_each_policylayer = 1 # if you have only 1 layer perceptron for policy net
-        self.policy_net = nn.ModuleList()
-        temp = nn.ModuleList()
-        temp.append(nn.Linear(input_dim, mlp_hidden))
-        temp.append(nn.Linear(mlp_hidden, mlp_hidden))
-        self.policy_net.append(temp)
-
-        for i in range(len(self.mlp) - 2):
-            temp = nn.ModuleList()
-            for j in range(n_each_policylayer):
-                temp.append(nn.Linear(self.mlp[i].out_features, self.mlp[i].out_features))
-            self.policy_net.append(temp)
-
-    def forward(self, x):
-        # return policies
-        policies = []
-        sample_probs = []
-        layer_masks = []
-
-        x = x.view(-1, 32 * 32 * 3)
-
-        # for each layer
-        h = x
-        # initialize u vector that has the same length as h
-        u = torch.ones(h.shape[0], h.shape[1])
-
-        for i in range(len(self.mlp) - 1):
-            # run policy network but in a detached way
-            p_i = self.policy_net[i][0](h)
-            p_i = torch.sigmoid(p_i)
-            for j in range(1, len(self.policy_net[i])):
-                p_i = self.policy_net[i][j](p_i)
-                p_i = torch.sigmoid(p_i)
-
-            # Apply the sigmoid and detach the policy output
-            p_i_detached = p_i.detach()
-
-            # Calculate p_i with specified min and max values
-            p_i = p_i * (condnet_max_prob - condnet_min_prob) + condnet_min_prob
-
-            # Bernoulli sample vector u_i of the same size as p_i
-            u_i = torch.bernoulli(p_i)
-
-            # Check if u_i.sum() is zero
-            if u_i.sum() == 0:
-                # Then return a random 0/1 vector
-                idx = np.random.randint(0, u_i.shape[0], size=(1)).astype(np.int16)
-                u_i[idx] = 1
-            else:
-                u_i = u_i
-
-            # Calculate the sampling probabilities
-            sampling_prob = p_i * u_i + (1 - p_i) * (1 - u_i)
-            sampling_prob = sampling_prob
-
-            # Find indexes where u_i == 0
-            idx = torch.where(u_i == 0)[0]
-
-            # Element-wise multiplication of h and u_i
-            h_copy = h.clone()
-            h = F.relu(self.mlp[i](h_copy * u)) * u_i
-
-            u = u_i
-            policies.append(p_i_detached)
-            sample_probs.append(sampling_prob)
-            layer_masks.append(u_i)
-
-        # Last layer without dynamic sampling
-        h = self.mlp[-1](h)
-        h = F.softmax(h, dim=1)
-
-        return h, policies, sample_probs, layer_masks
 
 class model_condnet(nn.Module):
     def __init__(self):
@@ -149,7 +61,7 @@ class model_condnet(nn.Module):
             self.mlp.append(nn.Linear(mlp_hidden, mlp_hidden))
         self.mlp.append(nn.Linear(mlp_hidden, output_dim))
 
-        n_each_policylayer = 2
+        n_each_policylayer = 1
         # n_each_policylayer = 1 # if you have only 1 layer perceptron for policy net
         self.policy_net = nn.ModuleList()
         temp = nn.ModuleList()
@@ -175,8 +87,10 @@ class model_condnet(nn.Module):
         u = torch.ones(h.shape[0], h.shape[1])
 
         for i in range(len(self.mlp)-1):
-            h_clone = h.clone()
-            p_i = self.policy_net[i][0](h_clone.detach())
+            # h_clone = h.clone()
+            # p_i = self.policy_net[i][0](h_clone.detach())
+            p_i = self.policy_net[i][0](h)
+
             p_i = F.sigmoid(p_i)
             for j in range(1, len(self.policy_net[i])):
                 p_i = self.policy_net[i][j](p_i)
@@ -185,15 +99,19 @@ class model_condnet(nn.Module):
             p_i = p_i * (condnet_max_prob - condnet_min_prob) + condnet_min_prob
             u_i = torch.bernoulli(p_i)
 
+            # debug[TODO]
+            u_i = torch.ones(u_i.shape[0], u_i.shape[1])
+
             if u_i.sum() == 0:
                 idx = np.random.uniform(0, u_i.shape[0], size = (1)).astype(np.int16)
                 u_i[idx] = 1
 
             sampling_prob = p_i * u_i + (1-p_i) * (1-u_i)
 
-            idx = torch.where(u_i == 0)[0]
+            # idx = torch.where(u_i == 0)[0]
 
-            h_next = F.relu(self.mlp[i](h*u.detach()))*u_i
+            # h_next = F.relu(self.mlp[i](h*u.detach()))*u_i
+            h_next = F.relu(self.mlp[i](h*u))*u_i
             h = h_next
             u = u_i
 
@@ -209,7 +127,7 @@ class model_condnet(nn.Module):
 def main():
     # main for the condnet
 
-    BATCH_SIZE = 40
+    BATCH_SIZE = 1000
     train_dataset = datasets.CIFAR10(
         root="../data/cifar10",
         train=True,
@@ -236,20 +154,22 @@ def main():
     # create model
     model = model_condnet()
     # model = model_condnet2()
-    learning_rate = 0.01
-    torch.autograd.set_detect_anomaly(True)
+    learning_rate = 0.1
+
 
     # lambda_s, lambda_v, lambda_l2
-    lambda_s = 100
-    lambda_v = 10
-    tau = 0.5
-    lambda_l2 = 5e-4
+    lambda_s = 1e-1 #100
+    lambda_v = 1e-3 #10
+    tau = 0.8
+    # lambda_l2 = 5e-4
+    lambda_l2 = 0
+    lambda_pg = 1e-5
 
     C = nn.CrossEntropyLoss()
-    # mlp_optimizer = optim.SGD(model.parameters(), lr=learning_rate,
-    #                       momentum=0.9, weight_decay=lambda_l2)
-    mlp_optimizer = optim.SGD(model.mlp.parameters(), lr=learning_rate,
+    mlp_optimizer = optim.SGD(model.parameters(), lr=learning_rate,
                           momentum=0.9, weight_decay=lambda_l2)
+    # mlp_optimizer = optim.SGD(model.mlp.parameters(), lr=learning_rate,
+    #                       momentum=0.9, weight_decay=lambda_l2)
     policy_optimizer = optim.SGD(model.policy_net.parameters(), lr=learning_rate,
                             momentum=0.9, weight_decay=lambda_l2)
 
@@ -299,13 +219,14 @@ def main():
 
             # Compute the policy gradient (PG) loss
             logp = torch.log(torch.cat(sample_probs)).sum(axis=1).mean()
-            PG = c * (-logp) + L
+            PG = lambda_pg * c * (-logp) + L
 
             # logp = torch.log(torch.concatenate(sample_probs)).sum(axis=1).mean()
             # PG = c * (-logp) + L
             PG.backward() # it needs to be checked [TODO]
+            # c.backward()
             mlp_optimizer.step()
-            policy_optimizer.step()
+            # policy_optimizer.step()
 
             # calculate accuracy
             pred = torch.argmax(outputs, dim=1)
@@ -316,7 +237,7 @@ def main():
             accs += acc
 
             # print PG.item(), and acc with name
-            print('Epoch: {}, Batch: {}, Cost: {:.3f}, PG:{:.3f}, Acc: {:.3f}, Tau: {:.2f}'.format(epoch, i, c.item(), PG.item(), acc, torch.stack(layer_masks).mean().item()))
+            print('Epoch: {}, Batch: {}, Cost: {:.35}, PG:{:.3f}, Acc: {:.3f}, Tau: {:.2f}'.format(epoch, i, c.item(), PG.item(), acc, torch.stack(layer_masks).mean().item()))
 
         # print epoch and epochs costs and accs
         print('Epoch: {}, Cost: {}, Accuracy: {}'.format(epoch, costs / bn, accs / bn))
