@@ -209,19 +209,20 @@ def main(args):
             # Compute the regularization loss L
 
             L = c + lambda_s * (torch.pow(torch.stack(policies).mean(axis=1) - tau, 2).mean() +
-                                torch.pow(torch.stack(policies).mean(axis=2) - tau, 2).mean() +
-                                lambda_v * (-1) * (torch.stack(sample_probs).var(axis=1).mean() +
-                                                   torch.stack(sample_probs).var(axis=2).mean()))
+                                torch.pow(torch.stack(policies).mean(axis=2) - tau, 2).mean())
+
+            L += lambda_v * (-1) * (torch.stack(policies).var(axis=1).mean() +
+                                    torch.stack(policies).var(axis=2).mean())
 
 
 
             # Compute the policy gradient (PG) loss
-            logp = torch.log(torch.cat(sample_probs)).sum(axis=1).mean()
+            logp = torch.log(torch.cat(policies)).sum(axis=1).mean()
             PG = lambda_pg * c * (-logp) + L
 
             PG.backward() # it needs to be checked [TODO]
             mlp_optimizer.step()
-            # policy_optimizer.step()
+            policy_optimizer.step()
 
             # calculate accuracy
             pred = torch.argmax(outputs, dim=1)
@@ -232,7 +233,7 @@ def main(args):
             accs += acc
 
             # print PG.item(), and acc with name
-            print('Epoch: {}, Batch: {}, Cost: {:.35}, PG:{:.3f}, Acc: {:.3f}, Tau: {:.2f}'.format(epoch, i, c.item(), PG.item(), acc, torch.stack(layer_masks).mean().item()))
+            print('Epoch: {}, Batch: {}, Cost: {:.10f}, PG:{:.10f}, Acc: {:.3f}, Tau: {:.3f}'.format(epoch, i, c.item(), PG.item(), acc, torch.stack(layer_masks).mean().item()))
 
         # print epoch and epochs costs and accs
         print('Epoch: {}, Cost: {}, Accuracy: {}'.format(epoch, costs / bn, accs / bn))
@@ -265,17 +266,17 @@ if __name__=='__main__':
     import argparse
     args = argparse.ArgumentParser()
     args.add_argument('--nlayers', type=int, default=3)
-    args.add_argument('--lambda_s', type=float, default=100)
-    args.add_argument('--lambda_v', type=float, default=10)
+    args.add_argument('--lambda_s', type=float, default=10)
+    args.add_argument('--lambda_v', type=float, default=1)
     args.add_argument('--lambda_l2', type=float, default=5e-4)
-    args.add_argument('--lambda_pg', type=float, default=1e-5)
+    args.add_argument('--lambda_pg', type=float, default=1e-3)
     args.add_argument('--tau', type=float, default=0.5)
-    args.add_argument('--lr', type=float, default=0.01)
+    args.add_argument('--lr', type=float, default=0.1)
     args.add_argument('--max_epochs', type=int, default=1000)
     args.add_argument('--condnet_min_prob', type=float, default=0.2)
     args.add_argument('--condnet_max_prob', type=float, default=0.8)
     args.add_argument('--learning_rate', type=float, default=0.1)
     args.add_argument('--BATCH_SIZE', type=int, default=512)
 
-    wandb.init(project="conditional_networks")
+    # wandb.init(project="conditional_networks")
     main(args=args.parse_args())
