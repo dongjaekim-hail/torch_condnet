@@ -11,11 +11,6 @@ import wandb
 
 from datetime import datetime
 
-# get time in string to save as file name
-now = datetime.now()
-dt_string = now.strftime("%Y-%m-%d_%H-%M-%S")
-
-
 class policyNet(nn.Module):
     def __init__(self, n_layer=4, hidden_s = [1024, 1024, np.nan]):
         super().__init__()
@@ -184,6 +179,7 @@ def main(args):
         model.train()
         costs = 0
         accs = 0
+        PGs = 0
 
         bn = 0
         # run for each batch
@@ -231,12 +227,23 @@ def main(args):
             # addup loss and acc
             costs += c.item()
             accs += acc
+            PGs += PG.item()
+
+            # wandb log training/batch
+            wandb.log({'train/batch_cost': c.item(), 'train/batch_acc': acc, 'train/batch_pg': PG.item(), 'train/batch_tau': tau})
 
             # print PG.item(), and acc with name
             print('Epoch: {}, Batch: {}, Cost: {:.10f}, PG:{:.10f}, Acc: {:.3f}, Tau: {:.3f}'.format(epoch, i, c.item(), PG.item(), acc, torch.stack(layer_masks).mean().item()))
 
+        # wandb log training/epoch
+        wandb.log({'train/epoch_cost': costs / bn, 'train/epoch_acc': accs / bn, 'train/epoch_tau': tau, 'train/epoch_PG': PGs/bn})
+
         # print epoch and epochs costs and accs
         print('Epoch: {}, Cost: {}, Accuracy: {}'.format(epoch, costs / bn, accs / bn))
+
+        costs = 0
+        accs = 0
+        PGs = 0
 
         model.eval()
         with torch.no_grad():
@@ -253,13 +260,44 @@ def main(args):
                 y_batch_one_hot[torch.arange(labels.shape[0]), labels.reshape(-1,).tolist()] = 1
 
                 # get output
-                output,_,_,_ = model(torch.tensor(inputs))
+                outputs, policies, sample_probs, layer_masks = model(torch.tensor(inputs))
 
                 # calculate accuracy
-                pred = torch.argmax(output, dim=1)
-                acc += torch.sum(pred == torch.tensor(labels.reshape(-1))).item() / labels.shape[0]
-            #print accuracyt
+                pred = torch.argmax(outputs, dim=1)
+                acc  = torch.sum(pred == torch.tensor(labels.reshape(-1))).item() / labels.shape[0]
+
+                # make labels one hot vector
+                y_one_hot = torch.zeros(labels.shape[0], 10)
+                y_one_hot[torch.arange(labels.shape[0]), labels.reshape(-1)] = 1
+
+                c = C(outputs, labels)
+
+                # Compute the regularization loss L
+
+                L = c + lambda_s * (torch.pow(torch.stack(policies).mean(axis=1) - tau, 2).mean() +
+                                    torch.pow(torch.stack(policies).mean(axis=2) - tau, 2).mean())
+
+                L += lambda_v * (-1) * (torch.stack(policies).var(axis=1).mean() +
+                                        torch.stack(policies).var(axis=2).mean())
+
+
+
+                # Compute the policy gradient (PG) loss
+                logp = torch.log(torch.cat(policies)).sum(axis=1).mean()
+                PG = lambda_pg * c * (-logp) + L
+
+                # wandb log test/batch
+                wandb.log({'test/batch_acc': acc, 'test/batch_cost': c.item(), 'test/batch_pg': PG.item()})
+
+                # addup loss and acc
+                costs += c.item()
+                accs += acc
+                PGs += PG.item()
+            #print accuracy
             print('Test Accuracy: {}'.format(acc / bn))
+
+            # wandb log test/epoch
+            wandb.log({'test/epoch_acc': acc / bn, 'test/epoch_cost': costs / bn, 'test/epoch_pg': PGs / bn})
 
 if __name__=='__main__':
     # make arguments and defaults for the parameters
@@ -278,5 +316,16 @@ if __name__=='__main__':
     args.add_argument('--learning_rate', type=float, default=0.1)
     args.add_argument('--BATCH_SIZE', type=int, default=512)
 
-    # wandb.init(project="conditional_networks")
+    # get time in string to save as file name
+    now = datetime.now()
+    dt_string = now.strftime("%Y-%m-%d_%H-%M-%S")
+
+    wandb.init(project="condnet",
+                config=args.__dict__
+                )
+
+    wandb.run.name = "condnet_mlp_mnist_{}".format(dt_string)
+
     main(args=args.parse_args())
+
+    wandb.finish()
