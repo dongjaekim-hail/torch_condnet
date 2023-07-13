@@ -311,8 +311,8 @@ if __name__=='__main__':
     args.add_argument('--tau', type=float, default=0.2)
     args.add_argument('--lr', type=float, default=0.1)
     args.add_argument('--max_epochs', type=int, default=1000)
-    args.add_argument('--condnet_min_prob', type=float, default=0.2)
-    args.add_argument('--condnet_max_prob', type=float, default=0.8)
+    args.add_argument('--condnet_min_prob', type=float, default=0.1)
+    args.add_argument('--condnet_max_prob', type=float, default=0.7)
     args.add_argument('--learning_rate', type=float, default=0.1)
     args.add_argument('--BATCH_SIZE', type=int, default=512)
 
