@@ -11,6 +11,9 @@ import wandb
 
 from datetime import datetime
 
+
+
+
 class Net(nn.Module):
     def __init__(self):
         super().__init__()
@@ -33,15 +36,20 @@ class Net(nn.Module):
 class model_condnet(nn.Module):
     def __init__(self,args):
         super().__init__()
+        if torch.cuda.is_available():
+            self.device = 'cuda'
+        else:
+            self.device = 'cpu'
+
         self.input_dim = 28*28
         mlp_hidden = 1024
         output_dim = 10
 
-        self.match_dim_layer = nn.Linear(self.input_dim, mlp_hidden)
-
         nlayers = args.nlayers
         self.condnet_min_prob = args.condnet_min_prob
         self.condnet_max_prob = args.condnet_max_prob
+
+        self.match_dim_layer = nn.Linear(self.input_dim, mlp_hidden).to(self.device)
 
 
         self.mlp_nlayer = 0
@@ -51,37 +59,47 @@ class model_condnet(nn.Module):
         for i in range(nlayers):
             self.mlp.append(nn.Linear(mlp_hidden, mlp_hidden))
         self.mlp.append(nn.Linear(mlp_hidden, output_dim))
+        self.mlp.to(self.device)
 
+        self.embedding = nn.Embedding(len(self.mlp), mlp_hidden).to(self.device)
+
+        n_each_policylayer = 1
         # n_each_policylayer = 1 # if you have only 1 layer perceptron for policy net
         self.policy_net = nn.ModuleList()
+        self.policy_net.append(nn.Linear(mlp_hidden*2, mlp_hidden))
         self.policy_net.append(nn.Linear(mlp_hidden, mlp_hidden))
         self.policy_net.append(nn.Linear(mlp_hidden, mlp_hidden))
-        self.policy_net.append(nn.Linear(mlp_hidden, mlp_hidden))
-
+        self.policy_net.to(self.device)
     def forward(self, x):
         # return policies
         policies = []
         sample_probs = []
         layer_masks = []
 
-        x = x.view(-1, self.input_dim)
+        x = x.view(-1, self.input_dim).to(self.device)
 
         # for each layer
         h = x
 
         h = self.match_dim_layer(h)
 
-        u = torch.ones(h.shape[0], h.shape[1])
+        u = torch.ones(h.shape[0], h.shape[1]).to(self.device)
 
         for i in range(len(self.mlp)-1):
-            p_i = self.policy_net[0](h)
+            # h_clone = h.clone()
+
+            # stack self.embedding as many as batch size
+            embed_ = self.embedding(torch.tensor(i).to(self.device))
+            embed_ = embed_.repeat(h.shape[0], 1)
+
+            p_i = self.policy_net[0](torch.cat((h,embed_), dim=1))
             p_i = F.sigmoid(p_i)
             for j in range(1, len(self.policy_net)):
                 p_i = self.policy_net[j](p_i)
                 p_i = F.sigmoid(p_i)
 
             p_i = p_i * (self.condnet_max_prob - self.condnet_min_prob) + self.condnet_min_prob
-            u_i = torch.bernoulli(p_i)
+            u_i = torch.bernoulli(p_i).to(self.device)
 
             # debug[TODO]
             # u_i = torch.ones(u_i.shape[0], u_i.shape[1])
@@ -186,15 +204,15 @@ def main(args):
             y_one_hot = torch.zeros(labels.shape[0], 10)
             y_one_hot[torch.arange(labels.shape[0]), labels.reshape(-1)] = 1
 
-            c = C(outputs, labels)
+            c = C(outputs, labels.to(model.device))
 
             # Compute the regularization loss L
 
-            L = c + lambda_s * (torch.pow(torch.stack(policies).mean(axis=1) - tau, 2).mean() +
-                                torch.pow(torch.stack(policies).mean(axis=2) - tau, 2).mean())
+            L = c + lambda_s * (torch.pow(torch.stack(policies).mean(axis=1) - torch.tensor(tau).to(model.device), 2).mean() +
+                                torch.pow(torch.stack(policies).mean(axis=2) - torch.tensor(tau).to(model.device), 2).mean())
 
-            L += lambda_v * (-1) * (torch.stack(policies).var(axis=1).mean() +
-                                    torch.stack(policies).var(axis=2).mean())
+            L += lambda_v * (-1) * (torch.stack(policies).to('cpu').var(axis=1).mean() +
+                                    torch.stack(policies).to('cpu').var(axis=2).mean())
 
 
 
@@ -207,13 +225,13 @@ def main(args):
             policy_optimizer.step()
 
             # calculate accuracy
-            pred = torch.argmax(outputs, dim=1)
+            pred = torch.argmax(outputs.to('cpu'), dim=1)
             acc = torch.sum(pred == torch.tensor(labels.reshape(-1))).item() / labels.shape[0]
 
             # addup loss and acc
-            costs += c.item()
+            costs += c.to('cpu').item()
             accs += acc
-            PGs += PG.item()
+            PGs += PG.to('cpu').item()
 
             # wandb log training/batch
             wandb.log({'train/batch_cost': c.item(), 'train/batch_acc': acc, 'train/batch_pg': PG.item(), 'train/batch_tau': tau})
@@ -249,19 +267,19 @@ def main(args):
                 outputs, policies, sample_probs, layer_masks = model(torch.tensor(inputs))
 
                 # calculate accuracy
-                pred = torch.argmax(outputs, dim=1)
+                pred = torch.argmax(outputs, dim=1).to('cpu')
                 acc  = torch.sum(pred == torch.tensor(labels.reshape(-1))).item() / labels.shape[0]
 
                 # make labels one hot vector
                 y_one_hot = torch.zeros(labels.shape[0], 10)
                 y_one_hot[torch.arange(labels.shape[0]), labels.reshape(-1)] = 1
 
-                c = C(outputs, labels)
+                c = C(outputs, labels.to(model.device))
 
                 # Compute the regularization loss L
 
-                L = c + lambda_s * (torch.pow(torch.stack(policies).mean(axis=1) - tau, 2).mean() +
-                                    torch.pow(torch.stack(policies).mean(axis=2) - tau, 2).mean())
+                L = c + lambda_s * (torch.pow(torch.stack(policies).mean(axis=1) - torch.tensor(tau).to(model.device), 2).mean() +
+                                    torch.pow(torch.stack(policies).mean(axis=2) - torch.tensor(tau).to(model.device), 2).mean())
 
                 L += lambda_v * (-1) * (torch.stack(policies).var(axis=1).mean() +
                                         torch.stack(policies).var(axis=2).mean())
@@ -273,12 +291,12 @@ def main(args):
                 PG = lambda_pg * c * (-logp) + L
 
                 # wandb log test/batch
-                wandb.log({'test/batch_acc': acc, 'test/batch_cost': c.item(), 'test/batch_pg': PG.item()})
+                wandb.log({'test/batch_acc': acc, 'test/batch_cost': c.to('cpu').item(), 'test/batch_pg': PG.to('cpu').item()})
 
                 # addup loss and acc
-                costs += c.item()
+                costs += c.to('cpu').item()
                 accs += acc
-                PGs += PG.item()
+                PGs += PG.to('cpu').item()
             #print accuracy
             print('Test Accuracy: {}'.format(accs / bn))
 
@@ -307,10 +325,10 @@ if __name__=='__main__':
     dt_string = now.strftime("%Y-%m-%d_%H-%M-%S")
 
     wandb.init(project="condnet",
-                config=args.__dict__
+                config=args.parse_args().__dict__
                 )
 
-    wandb.run.name = "condnet_mlp_mnist_single_policynet_{}".format(dt_string)
+    wandb.run.name = "condnet_mlp_single_pol_cat_{}".format(dt_string)
 
     main(args=args.parse_args())
 
