@@ -49,11 +49,13 @@ class model_condnet(nn.Module):
         self.condnet_min_prob = args.condnet_min_prob
         self.condnet_max_prob = args.condnet_max_prob
 
+        self.match_dim_layer = nn.Linear(self.input_dim, mlp_hidden).to(self.device)
+
 
         self.mlp_nlayer = 0
 
         self.mlp = nn.ModuleList()
-        self.mlp.append(nn.Linear(self.input_dim, mlp_hidden))
+        self.mlp.append(nn.Linear(mlp_hidden, mlp_hidden))
         for i in range(nlayers):
             self.mlp.append(nn.Linear(mlp_hidden, mlp_hidden))
         self.mlp.append(nn.Linear(mlp_hidden, output_dim))
@@ -62,16 +64,9 @@ class model_condnet(nn.Module):
         n_each_policylayer = 1
         # n_each_policylayer = 1 # if you have only 1 layer perceptron for policy net
         self.policy_net = nn.ModuleList()
-        temp = nn.ModuleList()
-        temp.append(nn.Linear(self.input_dim, mlp_hidden))
-        temp.append(nn.Linear(mlp_hidden, mlp_hidden))
-        self.policy_net.append(temp)
-
-        for i in range(len(self.mlp)-2):
-            temp = nn.ModuleList()
-            for j in range(n_each_policylayer):
-                temp.append(nn.Linear(self.mlp[i].out_features, self.mlp[i].out_features))
-            self.policy_net.append(temp)
+        self.policy_net.append(nn.Linear(mlp_hidden, mlp_hidden))
+        self.policy_net.append(nn.Linear(mlp_hidden, mlp_hidden))
+        self.policy_net.append(nn.Linear(mlp_hidden, mlp_hidden))
         self.policy_net.to(self.device)
     def forward(self, x):
         # return policies
@@ -83,16 +78,18 @@ class model_condnet(nn.Module):
 
         # for each layer
         h = x
+
+        h = self.match_dim_layer(h)
+
         u = torch.ones(h.shape[0], h.shape[1]).to(self.device)
 
         for i in range(len(self.mlp)-1):
             # h_clone = h.clone()
             # p_i = self.policy_net[i][0](h_clone.detach())
-            p_i = self.policy_net[i][0](h)
-
+            p_i = self.policy_net[0](h)
             p_i = F.sigmoid(p_i)
-            for j in range(1, len(self.policy_net[i])):
-                p_i = self.policy_net[i][j](p_i)
+            for j in range(1, len(self.policy_net)):
+                p_i = self.policy_net[j](p_i)
                 p_i = F.sigmoid(p_i)
 
             p_i = p_i * (self.condnet_max_prob - self.condnet_min_prob) + self.condnet_min_prob
@@ -325,7 +322,7 @@ if __name__=='__main__':
                 config=args.parse_args().__dict__
                 )
 
-    wandb.run.name = "condnet_mlp_mnist_{}".format(dt_string)
+    wandb.run.name = "condnet_mlp_single_pol_{}".format(dt_string)
 
     main(args=args.parse_args())
 
